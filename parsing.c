@@ -34,10 +34,23 @@ struct lenv;
 typedef struct lval lval;
 typedef struct lenv lenv;
 
+/* Forward parser declarations */
+
+mpc_parser_t* Number;
+mpc_parser_t* Decimal;
+mpc_parser_t* Boolean;
+mpc_parser_t* String;
+mpc_parser_t* Comment;
+mpc_parser_t* Symbol;
+mpc_parser_t* Sexpr;
+mpc_parser_t* Qexpr;
+mpc_parser_t* Expr;
+mpc_parser_t* Lispy;
+
 /* Lisp Value */
 
 enum { LVAL_ERR, LVAL_NUM,   LVAL_DEC, LVAL_SYM, LVAL_BOOL,
-       LVAL_FUN, LVAL_SEXPR, LVAL_QEXPR };
+       LVAL_STR, LVAL_FUN, LVAL_SEXPR, LVAL_QEXPR };
 
 enum { LVAL_FALSE, LVAL_TRUE };
 
@@ -51,6 +64,7 @@ struct lval {
   int boo;
   char* err;
   char* sym;
+  char* str;
 
   /* Function */
   lbuiltin builtin;
@@ -142,6 +156,14 @@ lval* lval_sym(char* s) {
 	return v;
 }
 
+lval* lval_str(char* s) {
+	lval* v = malloc(sizeof(lval));
+	v->type = LVAL_STR;
+	v->str = malloc(strlen(s) + 1);
+	strcpy(v->str, s);
+	return v;
+}
+
 lval* lval_sexpr(void) {
 	lval* v = malloc(sizeof(lval));
 	v->type = LVAL_SEXPR;
@@ -191,6 +213,7 @@ char* ltype_name(int t) {
 		case LVAL_BOOL: return "Boolean";
 		case LVAL_ERR: return "Error";
 		case LVAL_SYM: return "Symbol";
+		case LVAL_STR: return "String";
 		case LVAL_SEXPR: return "S-Expression";
 		case LVAL_QEXPR: return "Q-Expression";
 		default: return "Unknown";
@@ -217,8 +240,9 @@ void lval_del(lval* v) {
 
 
 		/* For Err or Sym free the string data */
-		case LVAL_ERR: free(v->err) ; break;
-		case LVAL_SYM: free(v->sym) ; break;
+		case LVAL_ERR: free(v->err); break;
+		case LVAL_SYM: free(v->sym); break;
+		case LVAL_STR: free(v->str); break;
 
 		/* If Qexpr or Sexpr then delete all elements inside */
 		case LVAL_QEXPR:
@@ -258,6 +282,21 @@ lval* lval_read_bool(mpc_ast_t* t) {
 	return lval_err("Invalid Boolean");
 }
 
+lval* lval_read_str(mpc_ast_t* t) {
+	/* Cut off the final quote character */
+	t->contents[strlen(t->contents)-1] = '\0';
+	/* Copy the string missing out the first quote character */
+	char* unescaped = malloc(strlen(t->contents+1)+1);
+	strcpy(unescaped, t->contents+1);
+	/* Pass through the unescape function */
+	unescaped = mpcf_unescape(unescaped);
+	/* Contruct a new lval using the string */
+	lval* str = lval_str(unescaped);
+	/* Free the string and return */
+	free(unescaped);
+	return str;
+}
+
 
 lval* lval_add(lval* v, lval* x) {
 	v->count++;
@@ -292,6 +331,7 @@ lval* lval_read(mpc_ast_t* t) {
 	if (strstr(t->tag, "decimal")) { return lval_read_dec(t); }
 	if (strstr(t->tag, "boolean")) { return lval_read_bool(t); }
 	if (strstr(t->tag, "symbol")) { return lval_sym(t->contents); }
+	if (strstr(t->tag, "string")) { return lval_read_str(t); }
 
 	/* If root (>) or sexpr then create empty list */
 	lval* x = NULL;
@@ -307,9 +347,22 @@ lval* lval_read(mpc_ast_t* t) {
 		if (strcmp(t->children[i]->contents, ")") == 0) { continue; }
 		if (strcmp(t->children[i]->contents, "}") == 0) { continue; }
 		if (strcmp(t->children[i]->tag, "regex") == 0) { continue; }
+		if (strstr(t->children[i]->tag, "comment")) { continue; }
 		x = lval_add(x, lval_read(t->children[i]));
 	}
 	return x;
+}
+
+void lval_print_str(lval* v) {
+	/* Make a copy of the string */
+	char* escaped = malloc(strlen(v->str)+1);
+	strcpy(escaped, v->str);
+	/* Pass it through the escape function */
+	escaped = mpcf_escape(escaped);
+	/* Print it between " characters */
+	printf("\"%s\"", escaped);
+	/* free the copied string */
+	free(escaped);
 }
 
 /* forward declaration */
@@ -342,6 +395,7 @@ void lval_print(lval* v){
 			else { printf("false"); }; break;
 		case LVAL_ERR: printf("Error: %s", v->err); break;
 		case LVAL_SYM: printf("%s", v->sym); break;
+		case LVAL_STR: lval_print_str(v); break;
 		case LVAL_FUN:
 			if (v->builtin) {
 				printf("<builtin>: %s", v->fun_name); break;
@@ -393,6 +447,11 @@ lval* lval_copy(lval* v) {
     case LVAL_SYM:
       x->sym = malloc(strlen(v->sym) + 1);
       strcpy(x->sym, v->sym); break;
+
+    case LVAL_STR:
+      x->str = malloc(strlen(v->str) + 1);
+      strcpy(x->str, v->str); break;
+
 
     /* Copy Lists by copying each sub-expression */
     case LVAL_SEXPR:
@@ -913,6 +972,7 @@ int lval_eq(lval* x, lval* y) {
 		/* Compare String values */
 		case LVAL_ERR: return (strcmp(x->err, y->err) == 0);
 		case LVAL_SYM: return (strcmp(x->sym, y->sym) == 0);
+		case LVAL_STR: return (strcmp(x->str, y->str) == 0);
 
 		/* If builtin compare, otherwise compare formals and body */
 		case LVAL_FUN:
@@ -1309,12 +1369,56 @@ long count_child(mpc_ast_t* t){
 	}
 	return count;
 }
+
+/* methods for loading in code from file */
+lval* builtin_load(lenv* e, lval* a) {
+	CHECK_ARG_NUM(a, 1, "load")
+	TYPE_CHECK(a, 0, LVAL_STR, "load")
+
+	/* Parse File given by string name */
+	mpc_result_t r;
+	if (mpc_parse_contents(a->cell[0]->str, Lispy, &r)) {
+
+		/* Read contents */
+		lval* expr = lval_read(r.output);
+		mpc_ast_delete(r.output);
+
+		/* Evalutate each expression */
+		while (expr->count) {
+			lval* x = lval_eval(e, lval_pop(expr, 0));
+			/* If Evaluation leads to error print it */
+			if (x->type == LVAL_ERR) { lval_println(x); }
+			lval_del(x);
+		}
+
+		/* Delete expressions and arguments */
+		lval_del(expr);
+		lval_del(a);
+
+		/* Return empty list */
+		return lval_sexpr();
+	} else {
+		/* Get parse Error as String */
+		char* err_msg = mpc_err_string(r.error);
+		mpc_err_delete(r.error);
+
+		/* Create new error message using it */
+		lval* err = lval_err("Could not load Library %s", err_msg);
+		free(err_msg);
+		lval_del(a);
+
+		/* Cleanup and return error */
+		return err;
+	}
+}
 int main(int argc, char** argv){
 	/* Create Some Parsers */
 	mpc_parser_t* Number = mpc_new("number");
 	mpc_parser_t* Decimal = mpc_new("decimal");
 	mpc_parser_t* Boolean = mpc_new("boolean");
 	mpc_parser_t* Symbol = mpc_new("symbol");
+	mpc_parser_t* String = mpc_new("string");
+	mpc_parser_t* Comment = mpc_new("comment");
 	mpc_parser_t* Sexpr  = mpc_new("sexpr");
 	mpc_parser_t* Qexpr = mpc_new("qexpr");
 	mpc_parser_t* Expr = mpc_new("expr");
@@ -1327,58 +1431,78 @@ int main(int argc, char** argv){
 		decimal		: /-?[0-9]+\\.[0-9]*/ ;		\
 		boolean		: \"true\" | \"false\" ;    \
 		symbol : /[a-zA-Z0-9_+\\-*\\/\\\\=<>!&|]+/ ;         \
+		string		: /\"(\\\\.|[^\"])*\"/ ; 	\
+		comment		: /;[^\\r\\n]*/ ;		\
 		sexpr 		: '(' <expr>* ')' ; \
 		qexpr 		: '{' <expr>* '}' ; \
-		expr 		: <decimal> | <number> | <boolean> | <symbol> |  <sexpr> | <qexpr> ; \
+		expr 		: <decimal> | <number> | <boolean> | <symbol> | <string> |  <sexpr> | <qexpr> ; \
 		lispy		: /^/   <expr>*  /$/ ; \
 		",
-		Number, Decimal, Boolean, Symbol, Sexpr, Qexpr, Expr, Lispy);
-
-	/* Print Version and Exit Information */
-	puts("Lispy Version 0.0.0.0.1");
-	puts("Made by Jamied");
-	puts("Press Ctrl+c to Exit\n");
-
+		Number, Decimal, Boolean, Symbol, String, Comment, Sexpr, Qexpr, Expr, Lispy);
 	lenv* e = lenv_new();
 	lenv_add_builtins(e);
 
-	/* In a never ending loop */
-	while (1){
 
-		/* Output our prompt and get input */
-		char* input = readline("jdlisp> ");
+	/* Supplied with list of files */
+	if (argc >= 2) {
 
-		/* Add input to history */
-		add_history(input);
+		/* loop over each supplied filename (starting from 1) */
+		for (int i = 1; i < argc; i++) {
 
-		/* Attempt to Parse the user Input */
-		mpc_result_t r;
-		if (mpc_parse("<stdin>", input, Lispy, &r)){
-			/* On Success Compute the AST */
-			/*printf("Number of Children: %ld\n", count_child(r.output));*/
-			lval* x = lval_eval(e, lval_read(r.output));
-			lval_println(x);
+			/* Argument list with a single argument, the filename */
+			lval* args = lval_add(lval_sexpr(), lval_str(argv[i]));
+
+			/* Pass to builtin load and get the result */
+			lval* x = builtin_load(e, args);
+
+			/* If the result is an error be sure to print it */
+			if (x->type == LVAL_ERR) { lval_println(x); }
 			lval_del(x);
-			/* mpc_ast_print(r.output);*/
-			mpc_ast_delete(r.output);
-		} else {
-			/* Otherwise Print the Error */
-			mpc_err_print(r.error);
-			mpc_err_delete(r.error);
 		}
+	} else {
+		/* Print Version and Exit Information */
+		puts("Lispy Version 0.0.0.0.1");
+		puts("Made by Jamied");
+		puts("Press Ctrl+c to Exit\n");
 
-		/* Free retrieved input */
-		free(input);
+			/* In a never ending loop */
+		while (1){
 
-		/* Check if exit function raised */
-		if (e->quit == 1) {
-			break;
+			/* Output our prompt and get input */
+			char* input = readline("jdlisp> ");
+
+			/* Add input to history */
+			add_history(input);
+
+			/* Attempt to Parse the user Input */
+			mpc_result_t r;
+			if (mpc_parse("<stdin>", input, Lispy, &r)){
+				/* On Success Compute the AST */
+				/*printf("Number of Children: %ld\n", count_child(r.output));*/
+				lval* x = lval_eval(e, lval_read(r.output));
+				lval_println(x);
+				lval_del(x);
+				/* mpc_ast_print(r.output);*/
+				mpc_ast_delete(r.output);
+			} else {
+				/* Otherwise Print the Error */
+				mpc_err_print(r.error);
+				mpc_err_delete(r.error);
+			}
+
+			/* Free retrieved input */
+			free(input);
+
+			/* Check if exit function raised */
+			if (e->quit == 1) {
+				break;
+			}
 		}
 	}
-
 	lenv_del(e);
 	/* Undefine and Delete our Parsers */
-	mpc_cleanup(8, Number, Decimal, Boolean, Symbol, Sexpr, Qexpr, Expr, Lispy);
+	mpc_cleanup(10, Number, Decimal, Boolean, Symbol, String, Comment, Sexpr, Qexpr, Expr, Lispy);
+
 	return 0;
 }
 
