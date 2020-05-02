@@ -36,9 +36,10 @@ typedef struct lenv lenv;
 
 /* Lisp Value */
 
-enum { LVAL_ERR, LVAL_NUM,   LVAL_DEC, LVAL_SYM,
+enum { LVAL_ERR, LVAL_NUM,   LVAL_DEC, LVAL_SYM, LVAL_BOOL,
        LVAL_FUN, LVAL_SEXPR, LVAL_QEXPR };
 
+enum { LVAL_FALSE, LVAL_TRUE };
 
 typedef lval*(*lbuiltin)(lenv*, lval*);
 
@@ -47,6 +48,7 @@ struct lval {
   /* Basic */
   long num;
   double dec;
+  int boo;
   char* err;
   char* sym;
 
@@ -98,6 +100,17 @@ lval* lval_num2dec(lval* v) {
 	w->dec = (double) v->num;
 	free(v);
 	return w;
+}
+
+lval* lval_bool(long x) {
+	lval* v = malloc(sizeof(lval));
+	v->type = LVAL_BOOL;
+	if (x) {
+		v->boo = LVAL_TRUE;
+	} else {
+		v->boo = LVAL_FALSE;
+	}
+	return v;
 }
 /* Construct a pointer to a new Error lval */
 lval* lval_err(char* fmt, ...){
@@ -179,6 +192,7 @@ char* ltype_name(int t) {
 		case LVAL_FUN: return "Function";
 		case LVAL_NUM: return "Number";
 		case LVAL_DEC: return "Decimal";
+		case LVAL_BOOL: return "Boolean";
 		case LVAL_ERR: return "Error";
 		case LVAL_SYM: return "Symbol";
 		case LVAL_SEXPR: return "S-Expression";
@@ -193,6 +207,7 @@ void lval_del(lval* v) {
 		/* Do nothing special for number or dec type */
 		case LVAL_NUM: break;
 		case LVAL_DEC: break;
+		case LVAL_BOOL: break;
 
 		/* Free up name for function */
 		case LVAL_FUN:
@@ -227,7 +242,7 @@ lval* lval_read_num(mpc_ast_t* t) {
 	errno = 0;
 	long x = strtol(t->contents, NULL, 10);
 	return errno != ERANGE ?
-		lval_num(x) : lval_err("n");
+		lval_num(x) : lval_err("invalid number");
 }
 
 lval* lval_read_dec(mpc_ast_t* t) {
@@ -236,6 +251,17 @@ lval* lval_read_dec(mpc_ast_t* t) {
 	return errno != ERANGE ?
 		lval_dec(x): lval_err("invalid decimal");
 }
+
+lval* lval_read_bool(mpc_ast_t* t) {
+	if (strcmp(t->contents, "true")){
+		return lval_bool(LVAL_TRUE);
+	}
+	if (strcmp(t->contents, "false")) {
+		return lval_bool(LVAL_FALSE);
+	}
+	return lval_err("Invalid Boolean");
+}
+
 
 lval* lval_add(lval* v, lval* x) {
 	v->count++;
@@ -269,6 +295,7 @@ lval* lval_read(mpc_ast_t* t) {
 	/* If Symbol, Decimal or Number return conversion to that type */
 	if (strstr(t->tag, "number")) { return lval_read_num(t); }
 	if (strstr(t->tag, "decimal")) { return lval_read_dec(t); }
+	if (strstr(t->tag, "boolean")) { return lval_read_bool(t); }
 	if (strstr(t->tag, "symbol")) { return lval_sym(t->contents); }
 
 	/* If root (>) or sexpr then create empty list */
@@ -315,6 +342,9 @@ void lval_print(lval* v){
 	switch (v->type){
 		case LVAL_NUM: printf("%li", v->num); break;
 		case LVAL_DEC: printf("%lf", v->dec); break;
+		case LVAL_BOOL:
+			if (v->boo == LVAL_TRUE) { printf("true"); }
+			else { printf("false"); }
 		case LVAL_ERR: printf("Error: %s", v->err); break;
 		case LVAL_SYM: printf("%s", v->sym); break;
 		case LVAL_FUN:
@@ -345,6 +375,7 @@ lval* lval_copy(lval* v) {
     /* Copy Functions and Numbers Directly */
     case LVAL_DEC: x->dec = v->dec; break;
     case LVAL_NUM: x->num = v->num; break;
+    case LVAL_BOOL: x->boo = v->boo; break;
 
     case LVAL_FUN:
       if (v->builtin) {
@@ -586,6 +617,14 @@ void lenv_def(lenv* e, lval* k, lval* v) {
 			fun_name, num, \
 			ltype_name(args->cell[num]->type), ltype_name(lval_type))
 
+#define NUM_CHECK(args, num, fun_name) \
+	if (!(args->cell[num]->type == LVAL_DEC || args->cell[num]->type == LVAL_NUM)) { \
+		lval* err = lval_err("Function %s expected either number or decimal type " \
+				     "for argument %i. Got %s." \
+				     fun_name, num, ltype_name(args->cell[num]->type)); \
+		lval_del(args); \
+		return err; \
+	}
 
 #define CHECK_ARG_NUM(args, num, fun_name) \
 	if (!(args->count == num)) { \
@@ -613,7 +652,15 @@ lval* dec_op(lval* a, char* op){
 	if ((strcmp(op, "-") == 0) && a->count == 0) {
 		x->dec = -x->dec;
 	}
-
+	/* If not, then reverse boolean */
+	if (strcmp(op, "!") == 0) {
+		x->type = LVAL_BOOL;
+		if (x->dec == 0) {
+			x->boo = 1;
+		} else {
+			x->boo = 0;
+		}
+	}
 	/* While there are still elements remaining */
 	while (a->count > 0) {
 
@@ -631,6 +678,31 @@ lval* dec_op(lval* a, char* op){
 			x->dec /= y->dec;
 		}
 		if (strcmp(op, "%") == 0) { return lval_err("Can't compute remainder on decimal types!");}
+		/* Comparison ops */
+		if (strcmp(op, ">") == 0) {
+			x->type = LVAL_BOOL;
+			x->boo = (x->dec > y->dec);
+		}
+		if (strcmp(op, "<") == 0) {
+			x->type = LVAL_BOOL;
+			x->boo = (x->dec < y->dec);
+		}
+		if (strcmp(op, ">=") == 0) {
+			x->type = LVAL_BOOL;
+			x->boo = (x->dec >= y->dec);
+		}
+		if (strcmp(op, "<=") == 0) {
+			x->type = LVAL_BOOL;
+			x->boo = (x->dec <= y->dec);
+		}
+		if (strcmp(op, "||") == 0) {
+			x->type = LVAL_BOOL;
+			x->boo = (x->dec || y->dec);
+		}
+		if (strcmp(op, "&&") == 0) {
+			x->type = LVAL_BOOL;
+			x->boo = (x->dec && y->dec);
+		}
 		lval_del(y);
 	}
 	lval_del(a); return x;
@@ -645,6 +717,15 @@ lval* num_op(lval* a, char* op) {
 	/* If no arguments and sub then perform unary negation */
 	if ((strcmp(op, "-") == 0) && a->count == 0) {
 		x->num = -x->num;
+	}
+	/* If not then reverse boolean */
+	if (strcmp(op, "!") == 0) {
+		x->type = LVAL_BOOL;
+		if (x->num == 0) {
+			x->boo = LVAL_FALSE;
+		} else {
+			x->boo = LVAL_TRUE;
+		}
 	}
 
 	/* While there are still elements remaining */
@@ -668,12 +749,36 @@ lval* num_op(lval* a, char* op) {
 			if (a->count > 0) { return lval_err("Remainder operator takes only two arguments!"); }
 			x->num %= y->num;
 		}
+		/* Comparison ops */
+		if (strcmp(op, ">") == 0) {
+			x->type = LVAL_BOOL;
+			x->boo = (x->num > y->num);
+		}
+		if (strcmp(op, "<") == 0) {
+			x->type = LVAL_BOOL;
+			x->boo = (x->num < y->num);
+		}
+		if (strcmp(op, ">=") == 0) {
+			x->type = LVAL_BOOL;
+			x->boo = (x->num >= y->num);
+		}
+		if (strcmp(op, "<=") == 0) {
+			x->type = LVAL_BOOL;
+			x->boo = (x->num <= y->num);
+		}
+		if (strcmp(op, "||") == 0) {
+			x->type = LVAL_BOOL;
+			x->boo = (x->num || y->num);
+		}
+		if (strcmp(op, "&&") == 0) {
+			x->type = LVAL_BOOL;
+			x->boo = (x->num && y->num);
+		}
 		lval_del(y);
 	}
 	lval_del(a); return x;
 
 }
-
 
 
 lval* builtin_op(lenv* e, lval* a, char* op) {
@@ -682,6 +787,11 @@ lval* builtin_op(lenv* e, lval* a, char* op) {
 	int is_dec = 0;
 	for (int i = 0; i < a->count; i++) {
 		if (a->cell[i]->type != LVAL_NUM) {
+			/* If boolean, convert to num for the purpose of the operation */
+			if (a->cell[i]->type == LVAL_BOOL) {
+				a->cell[i]->type = LVAL_NUM;
+				a->cell[i]->num = (long) a->cell[i]->boo;
+			}
 			/* If a decimal, make a note of this and continue */
 			if (a->cell[i]->type == LVAL_DEC) {
 				is_dec = 1;
@@ -725,6 +835,128 @@ lval* builtin_mul(lenv* e, lval* a) {
 
 lval* builtin_div(lenv* e, lval* a) {
 	return builtin_op(e, a, "/");
+}
+
+
+lval* builtin_gt(lenv* e, lval* a) {
+	CHECK_ARG_NUM(a, 2, ">")
+	return builtin_op(e, a, ">");
+}
+
+lval* builtin_lt(lenv* e, lval* a) {
+	CHECK_ARG_NUM(a, 2, "<")
+	return builtin_op(e, a, "<");
+}
+
+lval* builtin_ge(lenv* e, lval* a) {
+	CHECK_ARG_NUM(a, 2, ">=")
+	return builtin_op(e, a, ">=");
+}
+
+lval* builtin_le(lenv* e, lval* a) {
+	CHECK_ARG_NUM(a, 2, "<=")
+	return builtin_op(e, a, "<=");
+}
+
+lval* builtin_or(lenv* e, lval* a) {
+	CHECK_ARG_NUM(a, 2, "||")
+	return builtin_op(e, a, "||");
+}
+
+lval* builtin_and(lenv* e, lval* a) {
+	CHECK_ARG_NUM(a, 2, "&&")
+	return builtin_op(e, a, "&&");
+}
+
+lval* builtin_not(lenv* e, lval* a) {
+	CHECK_ARG_NUM(a, 1, "!")
+	return builtin_op(e, a, "!");
+}
+
+int lval_eq(lval* x, lval* y) {
+
+	/* Different Types */
+	if (x->type != y->type) {
+		if (!(x->type == LVAL_NUM || x->type == LVAL_DEC || x->type == LVAL_BOOL)) {
+			return 0;
+		}
+		if (!(y->type == LVAL_NUM || y->type == LVAL_DEC || x->type == LVAL_BOOL)) {
+			return 0;
+		}
+	}
+
+	switch (x->type) {
+		/* Compare Number Value */
+		case LVAL_NUM:
+			if (y->type == LVAL_NUM) {
+				return (x->num == y->num);
+			} else {return (x->num == y->dec);}
+		case LVAL_DEC:
+			if (y->type == LVAL_NUM) {
+				return (x->dec == y->num);
+			} else {return (x->dec == y->dec);}
+		case LVAL_FUN:
+			if (x->builtin || y->builtin) {
+				return x->builtin == y->builtin;
+			} else {
+				return lval_eq(x->formals, y-> formals)
+					&& lval_eq(x->body, y->body);
+			}
+		/* If list, compare every individual element */
+		case LVAL_QEXPR:
+		case LVAL_SEXPR:
+			if (x->count != y->count) { return 0; }
+			for (int i = 0; i < x->count; i++) {
+				/* If any element not equal then whole list not equal */
+				if (!lval_eq(x->cell[i], y->cell[i])) { return 0; }
+			}
+			/* Otherwise lists must be equal */
+			return 1;
+		break;
+	}
+	return 0;
+}
+
+lval* builtin_cmp(lenv* e, lval* a, char* op) {
+	CHECK_ARG_NUM(a, 2, op);
+	int r;
+	if (strcmp(op, "==") == 0) {
+		r = lval_eq(a->cell[0], a->cell[1]);
+	}
+	if (strcmp(op, "!=") == 0) {
+		r = !lval_eq(a->cell[0], a->cell[1]);
+	}
+	lval_del(a);
+	return lval_num(r);
+}
+
+lval* builtin_eq(lenv* e, lval* a) {
+	return builtin_cmp(e, a, "==");
+}
+
+lval* builtin_ne(lenv* e, lval* a) {
+	return builtin_cmp(e, a, "!=");
+}
+
+lval* lval_eval(lenv* e, lval* v);
+
+lval* builtin_if(lenv* e, lval* a) {
+	CHECK_ARG_NUM(a, 3, "if")
+	TYPE_CHECK(a, 0, LVAL_NUM, "if")
+	TYPE_CHECK(a, 1, LVAL_QEXPR, "if")
+	TYPE_CHECK(a, 2, LVAL_QEXPR, "if")
+	lval* v;
+	a->cell[1]->type = LVAL_SEXPR;
+	a->cell[2]->type = LVAL_SEXPR;
+
+	/* To evaluate expressions, add to sexpr and run eval */
+	if (a->cell[0]->num) {
+		v = lval_eval(e, lval_pop(a, 1));
+	} else {
+		v = lval_eval(e, lval_pop(a, 2));
+	}
+	lval_del(a);
+	return v;
 }
 
 lval* builtin_head(lenv* e, lval* a) {
@@ -837,7 +1069,6 @@ lval* builtin_put(lenv* e, lval* a) {
 }
 
 /* Implicit Declaration */
-lval* lval_eval(lenv* e, lval* v);
 
 
 lval* builtin_eval(lenv* e, lval* a) {
@@ -916,6 +1147,7 @@ lval* builtin_lambda(lenv* e, lval* a) {
 }
 
 
+
 /*
 lval* builtin(lenv* e, lval* a, char* func) {
 	if (strcmp("list", func) == 0) { return builtin_list(e, a); }
@@ -958,6 +1190,16 @@ void lenv_add_builtins(lenv* e) {
 	lenv_add_builtin(e, "-", builtin_sub);
 	lenv_add_builtin(e, "*", builtin_mul);
 	lenv_add_builtin(e, "/", builtin_div);
+	lenv_add_builtin(e, ">", builtin_gt);
+	lenv_add_builtin(e, "<", builtin_lt);
+	lenv_add_builtin(e, ">=", builtin_ge);
+	lenv_add_builtin(e, "<=", builtin_le);
+	lenv_add_builtin(e, "==", builtin_eq);
+	lenv_add_builtin(e, "!=", builtin_ne);
+	lenv_add_builtin(e, "if", builtin_if);
+	lenv_add_builtin(e, "||", builtin_or);
+	lenv_add_builtin(e, "&&", builtin_and);
+	lenv_add_builtin(e, "!", builtin_not);
 
 	lenv_add_builtin(e, "def", builtin_def);
 	lenv_add_builtin(e, "fun", builtin_fun);
@@ -1032,6 +1274,7 @@ int main(int argc, char** argv){
 	/* Create Some Parsers */
 	mpc_parser_t* Number = mpc_new("number");
 	mpc_parser_t* Decimal = mpc_new("decimal");
+	mpc_parser_t* Boolean = mpc_new("boolean");
 	mpc_parser_t* Symbol = mpc_new("symbol");
 	mpc_parser_t* Sexpr  = mpc_new("sexpr");
 	mpc_parser_t* Qexpr = mpc_new("qexpr");
@@ -1043,13 +1286,14 @@ int main(int argc, char** argv){
 		"					\
 		number		: /-?[0-9]+/ ; \
 		decimal		: /-?[0-9]+\\.[0-9]*/ ;		\
-		symbol : /[a-zA-Z0-9_+\\-*\\/\\\\=<>!&]+/ ;         \
+		boolean		: /true/ || /false/ ;    \
+		symbol : /[a-zA-Z0-9_+\\-*\\/\\\\=<>!&|]+/ ;         \
 		sexpr 		: '(' <expr>* ')' ; \
 		qexpr 		: '{' <expr>* '}' ; \
 		expr 		: <decimal> | <number> | <symbol> |  <sexpr> | <qexpr> ; \
 		lispy		: /^/   <expr>*  /$/ ; \
 		",
-		Number, Decimal, Symbol, Sexpr, Qexpr, Expr, Lispy);
+		Number, Decimal, Boolean, Symbol, Sexpr, Qexpr, Expr, Lispy);
 
 	/* Print Version and Exit Information */
 	puts("Lispy Version 0.0.0.0.1");
@@ -1095,7 +1339,7 @@ int main(int argc, char** argv){
 
 	lenv_del(e);
 	/* Undefine and Delete our Parsers */
-	mpc_cleanup(7, Number, Decimal, Symbol, Sexpr, Qexpr, Expr, Lispy);
+	mpc_cleanup(8, Number, Decimal, Boolean, Symbol, Sexpr, Qexpr, Expr, Lispy);
 	return 0;
 }
 
