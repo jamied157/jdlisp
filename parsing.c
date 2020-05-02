@@ -105,11 +105,7 @@ lval* lval_num2dec(lval* v) {
 lval* lval_bool(long x) {
 	lval* v = malloc(sizeof(lval));
 	v->type = LVAL_BOOL;
-	if (x) {
-		v->boo = LVAL_TRUE;
-	} else {
-		v->boo = LVAL_FALSE;
-	}
+	v->boo = x;
 	return v;
 }
 /* Construct a pointer to a new Error lval */
@@ -253,10 +249,10 @@ lval* lval_read_dec(mpc_ast_t* t) {
 }
 
 lval* lval_read_bool(mpc_ast_t* t) {
-	if (strcmp(t->contents, "true")){
+	if (strcmp(t->contents, "true") == 0){
 		return lval_bool(LVAL_TRUE);
 	}
-	if (strcmp(t->contents, "false")) {
+	if (strcmp(t->contents, "false") == 0) {
 		return lval_bool(LVAL_FALSE);
 	}
 	return lval_err("Invalid Boolean");
@@ -291,7 +287,6 @@ void lenv_del(lenv* e) {
 }
 
 lval* lval_read(mpc_ast_t* t) {
-
 	/* If Symbol, Decimal or Number return conversion to that type */
 	if (strstr(t->tag, "number")) { return lval_read_num(t); }
 	if (strstr(t->tag, "decimal")) { return lval_read_dec(t); }
@@ -344,7 +339,7 @@ void lval_print(lval* v){
 		case LVAL_DEC: printf("%lf", v->dec); break;
 		case LVAL_BOOL:
 			if (v->boo == LVAL_TRUE) { printf("true"); }
-			else { printf("false"); }
+			else { printf("false"); }; break;
 		case LVAL_ERR: printf("Error: %s", v->err); break;
 		case LVAL_SYM: printf("%s", v->sym); break;
 		case LVAL_FUN:
@@ -791,6 +786,7 @@ lval* builtin_op(lenv* e, lval* a, char* op) {
 			if (a->cell[i]->type == LVAL_BOOL) {
 				a->cell[i]->type = LVAL_NUM;
 				a->cell[i]->num = (long) a->cell[i]->boo;
+				continue;
 			}
 			/* If a decimal, make a note of this and continue */
 			if (a->cell[i]->type == LVAL_DEC) {
@@ -880,21 +876,45 @@ int lval_eq(lval* x, lval* y) {
 		if (!(x->type == LVAL_NUM || x->type == LVAL_DEC || x->type == LVAL_BOOL)) {
 			return 0;
 		}
-		if (!(y->type == LVAL_NUM || y->type == LVAL_DEC || x->type == LVAL_BOOL)) {
+		if (!(y->type == LVAL_NUM || y->type == LVAL_DEC || y->type == LVAL_BOOL)) {
 			return 0;
 		}
 	}
 
 	switch (x->type) {
-		/* Compare Number Value */
+		/* Compare Number/Decimal/Boolean Value */
 		case LVAL_NUM:
-			if (y->type == LVAL_NUM) {
-				return (x->num == y->num);
-			} else {return (x->num == y->dec);}
+			switch (y->type) {
+				case LVAL_NUM:
+					return (x->num == y->num);
+				case LVAL_DEC:
+					return (x->num == y->dec);
+				case LVAL_BOOL:
+					return (x->num == y->boo);
+			}
 		case LVAL_DEC:
-			if (y->type == LVAL_NUM) {
-				return (x->dec == y->num);
-			} else {return (x->dec == y->dec);}
+			switch (y->type) {
+				case LVAL_NUM:
+					return (x->dec == y->num);
+				case LVAL_DEC:
+					return (x->dec == y->dec);
+				case LVAL_BOOL:
+					return (x->dec == y->boo);
+			}
+		case LVAL_BOOL:
+			switch (y->type) {
+				case LVAL_NUM:
+					return (x->boo == y->num);
+				case LVAL_DEC:
+					return (x->boo == y->dec);
+				case LVAL_BOOL:
+					return (x->boo == y->boo);
+			}
+		/* Compare String values */
+		case LVAL_ERR: return (strcmp(x->err, y->err) == 0);
+		case LVAL_SYM: return (strcmp(x->sym, y->sym) == 0);
+
+		/* If builtin compare, otherwise compare formals and body */
 		case LVAL_FUN:
 			if (x->builtin || y->builtin) {
 				return x->builtin == y->builtin;
@@ -927,7 +947,7 @@ lval* builtin_cmp(lenv* e, lval* a, char* op) {
 		r = !lval_eq(a->cell[0], a->cell[1]);
 	}
 	lval_del(a);
-	return lval_num(r);
+	return lval_bool(r);
 }
 
 lval* builtin_eq(lenv* e, lval* a) {
@@ -942,7 +962,26 @@ lval* lval_eval(lenv* e, lval* v);
 
 lval* builtin_if(lenv* e, lval* a) {
 	CHECK_ARG_NUM(a, 3, "if")
-	TYPE_CHECK(a, 0, LVAL_NUM, "if")
+	/* Convert first argument to boolean type if numerical */
+	if (a->cell[0]->type == LVAL_NUM) {
+		a->cell[0]->type = LVAL_BOOL;
+		if (a->cell[0]->num) {
+			a->cell[0]->boo = LVAL_TRUE;
+		} else {
+			a->cell[0]->boo = LVAL_FALSE;
+		}
+	} else if (a->cell[0]->type == LVAL_DEC) {
+		a->cell[0]->type = LVAL_BOOL;
+		if (a->cell[0]->dec) {
+			a->cell[0]->boo = LVAL_TRUE;
+		} else {
+			a->cell[0]->boo = LVAL_FALSE;
+		}
+	} else if (a->cell[0]->type != LVAL_BOOL) {
+		return lval_err("Function if pass incorrected type for argument 0"
+				"Got %s, Expected Number, Decimal or Bool",
+				ltype_name(a->cell[0]->type));
+	}
 	TYPE_CHECK(a, 1, LVAL_QEXPR, "if")
 	TYPE_CHECK(a, 2, LVAL_QEXPR, "if")
 	lval* v;
@@ -1286,11 +1325,11 @@ int main(int argc, char** argv){
 		"					\
 		number		: /-?[0-9]+/ ; \
 		decimal		: /-?[0-9]+\\.[0-9]*/ ;		\
-		boolean		: /true/ || /false/ ;    \
+		boolean		: \"true\" | \"false\" ;    \
 		symbol : /[a-zA-Z0-9_+\\-*\\/\\\\=<>!&|]+/ ;         \
 		sexpr 		: '(' <expr>* ')' ; \
 		qexpr 		: '{' <expr>* '}' ; \
-		expr 		: <decimal> | <number> | <symbol> |  <sexpr> | <qexpr> ; \
+		expr 		: <decimal> | <number> | <boolean> | <symbol> |  <sexpr> | <qexpr> ; \
 		lispy		: /^/   <expr>*  /$/ ; \
 		",
 		Number, Decimal, Boolean, Symbol, Sexpr, Qexpr, Expr, Lispy);
