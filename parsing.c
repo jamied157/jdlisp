@@ -2,6 +2,7 @@
 #include <stdlib.h>
 
 #include "mpc.h"
+
 /* If we are compiling on Windows compile these functions */
 #ifdef _WIN32
 #include <string.h>
@@ -39,13 +40,14 @@ typedef struct lenv lenv;
 mpc_parser_t* Number;
 mpc_parser_t* Decimal;
 mpc_parser_t* Boolean;
+mpc_parser_t* Symbol;
 mpc_parser_t* String;
 mpc_parser_t* Comment;
-mpc_parser_t* Symbol;
 mpc_parser_t* Sexpr;
 mpc_parser_t* Qexpr;
 mpc_parser_t* Expr;
 mpc_parser_t* Lispy;
+
 
 /* Lisp Value */
 
@@ -1270,6 +1272,8 @@ void lenv_add_builtin(lenv* e, char* name, lbuiltin func) {
 	lval_del(k); lval_del(v);
 }
 
+lval* builtin_load(lenv* e, lval* v);
+
 void lenv_add_builtins(lenv* e) {
 	/* List Functions */
 	lenv_add_builtin(e, "list", builtin_list);
@@ -1283,6 +1287,7 @@ void lenv_add_builtins(lenv* e) {
 	lenv_add_builtin(e, "list_env", builtin_list_env);
 	lenv_add_builtin(e, "exit", builtin_exit);
 	lenv_add_builtin(e, "\\", builtin_lambda);
+	lenv_add_builtin(e, "load", builtin_load);
 
 	/* Mathematical Funtions */
 	lenv_add_builtin(e, "+", builtin_add);
@@ -1371,6 +1376,7 @@ long count_child(mpc_ast_t* t){
 }
 
 /* methods for loading in code from file */
+
 lval* builtin_load(lenv* e, lval* a) {
 	CHECK_ARG_NUM(a, 1, "load")
 	TYPE_CHECK(a, 0, LVAL_STR, "load")
@@ -1411,18 +1417,19 @@ lval* builtin_load(lenv* e, lval* a) {
 		return err;
 	}
 }
+
 int main(int argc, char** argv){
 	/* Create Some Parsers */
-	mpc_parser_t* Number = mpc_new("number");
-	mpc_parser_t* Decimal = mpc_new("decimal");
-	mpc_parser_t* Boolean = mpc_new("boolean");
-	mpc_parser_t* Symbol = mpc_new("symbol");
-	mpc_parser_t* String = mpc_new("string");
-	mpc_parser_t* Comment = mpc_new("comment");
-	mpc_parser_t* Sexpr  = mpc_new("sexpr");
-	mpc_parser_t* Qexpr = mpc_new("qexpr");
-	mpc_parser_t* Expr = mpc_new("expr");
-	mpc_parser_t* Lispy = mpc_new("lispy");
+	Number = mpc_new("number");
+	Decimal = mpc_new("decimal");
+	Boolean = mpc_new("boolean");
+	Symbol = mpc_new("symbol");
+	String = mpc_new("string");
+	Comment = mpc_new("comment");
+	Sexpr  = mpc_new("sexpr");
+	Qexpr = mpc_new("qexpr");
+	Expr = mpc_new("expr");
+	Lispy = mpc_new("lispy");
 
 	/* Define them with the following Language */
 	mpca_lang(MPCA_LANG_DEFAULT,
@@ -1435,7 +1442,8 @@ int main(int argc, char** argv){
 		comment		: /;[^\\r\\n]*/ ;		\
 		sexpr 		: '(' <expr>* ')' ; \
 		qexpr 		: '{' <expr>* '}' ; \
-		expr 		: <decimal> | <number> | <boolean> | <symbol> | <string> |  <sexpr> | <qexpr> ; \
+		expr 		: <decimal> | <number> | <boolean> | <symbol> \
+	       			| <string> | <comment> |  <sexpr> | <qexpr> ; \
 		lispy		: /^/   <expr>*  /$/ ; \
 		",
 		Number, Decimal, Boolean, Symbol, String, Comment, Sexpr, Qexpr, Expr, Lispy);
@@ -1445,7 +1453,6 @@ int main(int argc, char** argv){
 
 	/* Supplied with list of files */
 	if (argc >= 2) {
-
 		/* loop over each supplied filename (starting from 1) */
 		for (int i = 1; i < argc; i++) {
 
@@ -1461,6 +1468,7 @@ int main(int argc, char** argv){
 		}
 	} else {
 		/* Print Version and Exit Information */
+
 		puts("Lispy Version 0.0.0.0.1");
 		puts("Made by Jamied");
 		puts("Press Ctrl+c to Exit\n");
