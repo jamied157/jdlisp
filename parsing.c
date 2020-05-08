@@ -51,8 +51,8 @@ mpc_parser_t* Lispy;
 
 /* Lisp Value */
 
-enum { LVAL_ERR, LVAL_NUM,   LVAL_DEC, LVAL_SYM, LVAL_BOOL,
-       LVAL_STR, LVAL_FUN, LVAL_SEXPR, LVAL_QEXPR };
+enum { LVAL_ERR, LVAL_NUM,  LVAL_DEC, LVAL_SYM, LVAL_BOOL, LVAL_OK,
+       LVAL_STR, LVAL_USTR, LVAL_FUN, LVAL_SEXPR, LVAL_QEXPR };
 
 enum { LVAL_FALSE, LVAL_TRUE };
 
@@ -124,6 +124,13 @@ lval* lval_bool(long x) {
 	v->boo = x;
 	return v;
 }
+
+lval* lval_ok() {
+	lval* v = malloc(sizeof(lval));
+	v->type = LVAL_OK;
+	return v;
+}
+
 /* Construct a pointer to a new Error lval */
 lval* lval_err(char* fmt, ...){
 	lval* v = malloc(sizeof(lval));
@@ -367,6 +374,10 @@ void lval_print_str(lval* v) {
 	free(escaped);
 }
 
+void lval_print_ustr(lval* v) {
+	printf("\"%s\"", v->str);
+}
+
 /* forward declaration */
 
 void lval_print (lval* v);
@@ -395,9 +406,11 @@ void lval_print(lval* v){
 		case LVAL_BOOL:
 			if (v->boo == LVAL_TRUE) { printf("true"); }
 			else { printf("false"); }; break;
+		case LVAL_OK: break;
 		case LVAL_ERR: printf("Error: %s", v->err); break;
 		case LVAL_SYM: printf("%s", v->sym); break;
 		case LVAL_STR: lval_print_str(v); break;
+		case LVAL_USTR: lval_print_ustr(v); break;
 		case LVAL_FUN:
 			if (v->builtin) {
 				printf("<builtin>: %s", v->fun_name); break;
@@ -498,6 +511,14 @@ lval* lval_join(lval* x, lval* y) {
 		x = lval_add(x, lval_pop(y, 0));
 	}
 	/* Delete the empty 'y' and return 'x' */
+	lval_del(y);
+	return x;
+}
+
+lval* lval_str_join(lval* x, lval* y) {
+
+	x->str = realloc(x->str, strlen(x->str) + strlen(y->str) + 1);
+	strcat(x->str, y->str);
 	lval_del(y);
 	return x;
 }
@@ -1060,18 +1081,34 @@ lval* builtin_if(lenv* e, lval* a) {
 	return v;
 }
 
-lval* builtin_head(lenv* e, lval* a) {
-	CHECK_ARG_NUM(a, 1, "head");
-	TYPE_CHECK(a, 0, LVAL_QEXPR, "head");
-	CHECK_EMPTY(a, "head");
+lval* builtin_qexpr_head(lenv* e, lval* a) {
+	TYPE_CHECK(a, 0, LVAL_QEXPR, "head")
+	CHECK_EMPTY(a, "head")
 
 	lval* v = lval_take(a, 0);
 	while (v->count > 1) { lval_del(lval_pop(v, 1)); }
 	return v;
 }
 
-lval* builtin_tail(lenv* e, lval* a) {
-	CHECK_ARG_NUM(a, 1, "tail")
+lval* builtin_str_head(lenv* e, lval* a) {
+	TYPE_CHECK(a, 0, LVAL_STR, "head")
+
+	lval* v = lval_take(a, 0);
+	v->str = realloc(v->str, 2);
+	v->str[1] = '\0';
+	return v;
+}
+
+lval* builtin_head(lenv* e, lval* a) {
+	CHECK_ARG_NUM(a, 1, "head");
+	if (a->cell[0]->type == LVAL_QEXPR) {
+		return builtin_qexpr_head(e, a);
+	} else {
+		return builtin_str_head(e, a);
+	}
+}
+
+lval* builtin_qexpr_tail(lenv* e, lval* a) {
 	TYPE_CHECK(a, 0, LVAL_QEXPR, "tail");
 	CHECK_EMPTY(a,	"tail");
 
@@ -1080,6 +1117,25 @@ lval* builtin_tail(lenv* e, lval* a) {
 	return v;
 }
 
+lval* builtin_str_tail(lenv* e, lval* a) {
+	TYPE_CHECK(a, 0, LVAL_STR, "tail");
+
+	lval* v = lval_take(a, 0);
+	char tail = v->str[strlen(v->str) - 1];
+	v->str = realloc(v->str, 2);
+	v->str[0] = tail;
+	v->str[1] = '\0';
+	return v;
+}
+
+lval* builtin_tail(lenv* e, lval* a) {
+	CHECK_ARG_NUM(a, 1, "tail");
+	if (a->cell[0]->type == LVAL_QEXPR) {
+		return builtin_qexpr_tail(e, a);
+	} else {
+		return builtin_str_tail(e, a);
+	}
+}
 lval* builtin_prepend(lenv* e, lval* a) {
 	/* prepends value to qexpr */
 	CHECK_ARG_NUM(a, 2, "prepend")
@@ -1113,6 +1169,51 @@ lval* builtin_list(lenv* e, lval* a) {
 	a->type = LVAL_QEXPR;
 	return a;
 }
+
+lval* builtin_read(lenv* e, lval* a) {
+	TYPE_CHECK(a, 0, LVAL_STR, "read")
+	CHECK_ARG_NUM(a, 1, "read")
+
+	/* Parse string */
+	mpc_result_t r;
+	if (mpc_parse("<stdin>", a->cell[0]->str, Lispy, &r)) {
+
+		/* Read contents */
+		lval* expr = lval_read(r.output);
+		expr->type = LVAL_QEXPR;
+		mpc_ast_delete(r.output);
+
+		/* Delete expressions and arguments */
+		lval_del(a);
+
+		/* Return empty list */
+		return expr;
+	} else {
+		/* Get parse Error as String */
+		char* err_msg = mpc_err_string(r.error);
+		mpc_err_delete(r.error);
+
+		/* Create new error message using it */
+		lval* err = lval_err("Could not read: %s", err_msg);
+		free(err_msg);
+		lval_del(a);
+
+		/* Cleanup and return error */
+		return err;
+	}
+}
+
+lval* builtin_show(lenv* e, lval* a) {
+	TYPE_CHECK(a, 0, LVAL_STR, "show")
+	CHECK_ARG_NUM(a, 1, "show")
+	lval* v = lval_take(a, 0);
+	v->type = LVAL_USTR;
+	lval_print(v);
+	putchar('\n');
+	lval_del(v);
+	return lval_ok();
+}
+
 
 lval* builtin_var(lenv* e, lval* a, char* func) {
 	TYPE_CHECK(a, 0, LVAL_QEXPR, func);
@@ -1182,13 +1283,10 @@ lval* builtin_eval(lenv* e, lval* a) {
 }
 
 
-
-lval* builtin_join(lenv* e, lval* a) {
-
+lval* builtin_qexpr_join(lenv* e, lval* a) {
 	for (int i = 0; i < a->count; i++) {
-		TYPE_CHECK(a, i, LVAL_QEXPR, "join");
+		TYPE_CHECK(a, i, LVAL_QEXPR, "qexpr join");
 	}
-
 	lval* x = lval_pop(a, 0);
 
 	while (a->count) {
@@ -1197,6 +1295,29 @@ lval* builtin_join(lenv* e, lval* a) {
 
 	lval_del(a);
 	return x;
+}
+
+lval* builtin_str_join(lenv* e, lval* a) {
+	for (int i = 0; i< a->count; i++) {
+		TYPE_CHECK(a, i, LVAL_STR, "string join")
+	}
+	lval* x = lval_pop(a, 0);
+
+	while (a->count) {
+		x = lval_str_join(x, lval_pop(a, 0));
+	}
+
+	lval_del(a);
+	return x;
+}
+
+
+lval* builtin_join(lenv* e, lval* a) {
+	if (a->cell[0]->type == LVAL_QEXPR){
+		return builtin_qexpr_join(e, a);
+	} else {
+		return builtin_str_join(e, a);
+	}
 }
 
 lval* builtin_list_env(lenv* e, lval* a) {
@@ -1292,6 +1413,8 @@ void lenv_add_builtins(lenv* e) {
 	lenv_add_builtin(e, "load", builtin_load);
 	lenv_add_builtin(e, "error", builtin_error);
 	lenv_add_builtin(e, "print", builtin_print);
+	lenv_add_builtin(e, "read", builtin_read);
+	lenv_add_builtin(e, "show", builtin_show);
 
 	/* Mathematical Funtions */
 	lenv_add_builtin(e, "+", builtin_add);
@@ -1432,7 +1555,7 @@ lval* builtin_print(lenv* e, lval* a) {
 	/* Print a newline and delete arguments */
 	putchar('\n');
 	lval_del(a);
-	return lval_sexpr();
+	return lval_ok();
 }
 
 lval* builtin_error(lenv* e, lval* a) {
