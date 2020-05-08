@@ -1072,7 +1072,7 @@ lval* builtin_if(lenv* e, lval* a) {
 	a->cell[2]->type = LVAL_SEXPR;
 
 	/* To evaluate expressions, add to sexpr and run eval */
-	if (a->cell[0]->num) {
+	if (a->cell[0]->boo) {
 		v = lval_eval(e, lval_pop(a, 1));
 	} else {
 		v = lval_eval(e, lval_pop(a, 2));
