@@ -73,3 +73,57 @@
 		{join (if (f (fst l)) {head l} {nil}) (filter f (tail l))}
 })
 
+(fun {foldl f z l} {
+	if (== l nil)
+		{z}
+		{foldl f (f z (st l)) (tail)}
+})
+
+(fun {sum l} {foldl + 0 l})
+(fun {product l} {foldl * 1 l})
+
+(fun {select & cs} {
+	if (== cs nil)
+		{error "No Selection Found"}
+		{if (fst (fst cs)) {snd (fst cs)} {unpack select (tail cs)}}
+})
+
+; Default Case
+(def {otherwise} true)
+
+; Print Day of Month Suffix
+(fun {month-day-suffix i} {
+	select
+		{(== i 1) "st"}
+		{(== i 2) "nd"}
+		{(== i 3) "rd"}
+		{otherwise "th"}
+})
+
+(fun {case x & cs} {
+	if (== cs nil)
+		{error "No Case Found"}
+		{if (== x (fst (fst cs))) {snd (fst cs)} {
+			unpack case (join (list x) (tail cs))}}
+})
+
+(fun {day-name x} {
+	case x
+		{0 "Monday"}
+		{1 "Tuesday"}
+		{2 "Wednesday"}
+		{3 "Thursday"}
+		{4 "Friday"}
+		{5 "Saturday"}
+		{6 "Sunday"}
+})
+
+; Fibonacci
+(fun {fib n} {
+	select
+		{ (== n 0) 0 }
+		{ (== n 1) 1 }
+		{ otherwise ( + (fib (- n 1)) (fib (- n 2))) }
+})
+
+
