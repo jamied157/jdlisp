@@ -1601,6 +1601,8 @@ int main(int argc, char** argv){
 		Number, Decimal, Boolean, Symbol, String, Comment, Sexpr, Qexpr, Expr, Lispy);
 	lenv* e = lenv_new();
 	lenv_add_builtins(e);
+	lval* v = builtin_load(e, lval_add(lval_sexpr(), lval_str("std.lspy")));
+	lval_del(v);
 
 
 	/* Supplied with list of files */
