@@ -127,3 +127,12 @@
 })
 
 
+; InsertL
+(fun {insertL new old lat} {
+	if (== lat {})
+		{{}}
+		{if (== (eval (head lat)) old)
+                	{cons new lat}
+               		{cons (eval (head lat)) (insertL new old (tail lat))}
+		}
+})
