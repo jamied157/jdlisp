@@ -36,4 +36,7 @@ Run `./jdlisp` to start the interactive prompt. Some examples of things you can 
 })
 ```
 
+Look through the standard library stdlib.jdl for more examples. This library is loaded in every time the interactive prompt is run.
+
+
 The MPC library is taken from https://github.com/orangeduck/mpc
