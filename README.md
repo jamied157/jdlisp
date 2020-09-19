@@ -36,6 +36,4 @@ Run `./jdlisp` to start the interactive prompt. Some examples of things you can 
 })
 ```
 
-
-
-
+The MPC library is taken from https://github.com/orangeduck/mpc
