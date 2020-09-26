@@ -2,6 +2,7 @@
 #include <stdlib.h>
 
 #include "mpc.h"
+#include "hash_table/hash_table.h"
 
 /* If we are compiling on Windows compile these functions */
 #ifdef _WIN32
